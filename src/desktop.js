@@ -15,8 +15,10 @@ export async function attach({ renderer, setHeight }) {
   let probe = null; // 다음 렌더 직후 알파를 읽을 캔버스 픽셀
   await win.setIgnoreCursorEvents(true);
 
+  // 창은 움직이지 않으므로 위치는 한 번만 읽는다.
+  const origin = await win.outerPosition();
   setInterval(async () => {
-    const [cursor, origin] = await Promise.all([cursorPosition(), win.outerPosition()]);
+    const cursor = await cursorPosition();
     probe = { x: Math.round(cursor.x - origin.x), y: Math.round(cursor.y - origin.y) };
   }, PROBE_MS);
 

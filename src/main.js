@@ -181,9 +181,15 @@ if (import.meta.env.DEV && !desktop) {
 
 // ?speed=5 처럼 시간 배속. 긴 흐름을 빨리 확인할 때 쓴다.
 const simSpeed = Number(new URLSearchParams(location.search).get('speed')) || 1;
+// 클립이 30fps로 만들어져 있어서 그 이상 그리지 않는다. 하루 종일 켜 두는 앱이라 CPU를 아낀다.
+const MAX_FPS = 30;
 const timer = new THREE.Timer();
 timer.connect(document);
+let pending = 0;
 renderer.setAnimationLoop((time) => {
   timer.update(time);
-  step(Math.min(timer.getDelta(), 0.1) * simSpeed); // 창이 가려졌다 돌아올 때 순간이동 방지
+  pending += timer.getDelta();
+  if (pending < 1 / MAX_FPS - 0.004) return; // 모니터 주사율 오차 여유
+  step(Math.min(pending, 0.1) * simSpeed); // 창이 가려졌다 돌아올 때 순간이동 방지
+  pending = 0;
 });

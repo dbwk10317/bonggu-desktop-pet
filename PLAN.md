@@ -26,7 +26,7 @@
 
 최소 Tauri 앱으로 확인함: 릴리스 빌드 성공, 창 실행 성공. exe는 MinGW DLL이 필요 없고
 Windows 기본 DLL(UCRT 포함)만 쓴다. 단, GNU 빌드는 `WebView2Loader.dll`을 정적 링크하지 않으므로
-exe 옆에 같이 배포해야 한다. 5단계에서 설치 파일(NSIS)에 이 DLL이 들어가는지 확인한다.
+exe 옆에 같이 배포해야 한다. Tauri NSIS 번들러가 이 DLL을 자동으로 설치·제거한다(`npx tauri build --bundles nsis`).
 
 ## 창 구성
 
@@ -50,7 +50,8 @@ exe 옆에 같이 배포해야 한다. 5단계에서 설치 파일(NSIS)에 이 
 - 모델 전방은 glTF +Z. 진행 방향(±X)으로 돌리되 얼굴이 보이도록 카메라 쪽으로 약 20° 더 돌린다.
   화면 이동 속도에 `cos(20°)`를 곱해 발 미끄러짐을 맞춘다. 방향 전환은 약 0.4초 회전.
 - 투명 배경: `alpha: true`, `setClearColor(0x000000, 0)`, premultiplied alpha 확인.
-- 쉬는 상태에서는 프레임률을 낮추는 것을 고려한다(측정 후 결정).
+- **30fps 상한**: 클립이 30fps로 만들어져 있다. Windows 측정(2560×300 띠 창)에서 60fps는 코어 하나의 약 32%,
+  30fps는 약 15%를 썼다. 메모리는 WebView2 포함 약 500MB, GPU 약 0.5%. 더 줄여야 하면 쉬는 동안 프레임을 낮춘다.
 
 ## 동작 (clips.json 계약)
 
