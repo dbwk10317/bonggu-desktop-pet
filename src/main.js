@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { createBrain } from './behavior.js';
 
 const TARGET_HEIGHT_PX = 140;
 const GROUND_MARGIN_PX = 16; // 창 아래쪽과 발 사이 여백(그림자 자리)
@@ -72,9 +73,12 @@ let current = null;
 let smile = 0;
 let ui = null;
 
-function play(name) {
+function play(name, timeScale = 1) {
   const info = clipInfo[name];
-  const next = actions[name].reset();
+  const next = actions[name];
+  next.timeScale = timeScale;
+  if (next === current && info.loop) return; // 이미 도는 루프를 처음으로 되감지 않는다
+  next.reset();
   next.setLoop(info.loop ? THREE.LoopRepeat : THREE.LoopOnce, Infinity);
   next.clampWhenFinished = !info.loop;
   if (current && current !== next) next.crossFadeFrom(current, contract.locomotion_blend_seconds, false);
@@ -87,19 +91,19 @@ play('Idle');
 
 // --- 이동과 방향 ---
 let dir = 1; // +1 오른쪽, -1 왼쪽
+let speedPx = 0; // 현재 화면 이동 속도(px/s)
 const facing = (d) => d * THREE.MathUtils.degToRad(90 - FACE_CAMERA_DEG);
 const moveFactor = Math.cos(THREE.MathUtils.degToRad(FACE_CAMERA_DEG));
 bonggu.rotation.y = facing(dir);
 
 function update(dt) {
-  // 크로스페이드 중에는 가중치만큼 섞인 속도로 움직인다.
+  // 크로스페이드 중에는 가중치만큼 섞인 속도로 움직인다. timeScale을 흔들면 속도도 같은 비율로.
   // 재생한 적 없는 동작도 가중치가 1로 남아 있어서 재생 중인 것만 센다.
   const mps = Object.values(actions)
     .filter((a) => a.isRunning())
-    .reduce((s, a) => s + a.getEffectiveWeight() * clipInfo[a.getClip().name].forward_speed_mps, 0);
-  bonggu.position.x += dir * mps * ppm * moveFactor * dt;
-  const edge = innerWidth / 2 - TARGET_HEIGHT_PX;
-  if (Math.abs(bonggu.position.x) > edge && Math.sign(bonggu.position.x) === dir) dir = -dir; // ponytail: 2단계 확인용, 3단계에서 행동 선택으로 바꾼다
+    .reduce((s, a) => s + a.getEffectiveWeight() * a.getEffectiveTimeScale() * clipInfo[a.getClip().name].forward_speed_mps, 0);
+  speedPx = mps * ppm * moveFactor;
+  bonggu.position.x += dir * speedPx * dt;
 
   const target = facing(dir);
   const step = (Math.PI / TURN_SECONDS) * dt;
@@ -110,27 +114,67 @@ function update(dt) {
   setSmile(smile);
 }
 
+// --- 행동 ---
+const body = {
+  clips: contract.clips,
+  blendSeconds: contract.locomotion_blend_seconds,
+  clipSeconds: (name) => clipInfo[name].duration_seconds,
+  play,
+  face: (d) => (dir = d),
+  get dir() { return dir; },
+  get turned() { return Math.abs(bonggu.rotation.y - facing(dir)) < 1e-3; },
+  get x() { return bonggu.position.x; },
+  get speed() { return speedPx; },
+  get halfWidth() { return innerWidth / 2; },
+  get clip() { return current.getClip().name; },
+  get clipLoops() { return clipInfo[this.clip].loop; },
+  get state() { return clipInfo[this.clip].exit_state; },
+};
+const brain = createBrain(body, { log: import.meta.env.DEV ? (m) => console.info(`[봉구] ${m}`) : undefined });
+brain.start();
+
+// 봉구를 클릭하면 쓰다듬기. 그림자는 제외한다.
+const raycaster = new THREE.Raycaster();
+renderer.domElement.addEventListener('click', (e) => {
+  const r = renderer.domElement.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), camera);
+  if (raycaster.intersectObject(bonggu, true).some((h) => h.object !== shadow)) brain.pet();
+});
+
+function step(dt) {
+  mixer.update(dt);
+  update(dt);
+  brain.tick(dt);
+  renderer.render(scene, camera);
+}
+
 // --- 개발용 패널 (vite dev에서만) ---
 if (import.meta.env.DEV) {
   ui = (await import('./dev-panel.js')).mount({
     clips: contract.clips,
-    play,
+    play: (name) => (brain.stop(), play(name)),
     turn: () => (dir = -dir),
+    brain,
     tilt: tiltDeg,
     setTilt: (v) => ((tiltDeg = v), resize()),
   });
   ui.show(current.getClip().name);
-  // 콘솔 디버깅용. tick(dt)은 창이 가려져 프레임이 멈췄을 때 시간을 직접 진행시킨다.
-  const tick = (dt) => (mixer.update(dt), update(dt), renderer.render(scene, camera));
-  Object.assign(window, { bonggu, actions, camera, tick });
+  // 콘솔 디버깅용. tick(초)은 창이 가려져 프레임이 멈췄을 때 시간을 직접 진행시킨다.
+  // 프레임마다 마이크로태스크를 양보해야 행동 선택의 await가 이어진다.
+  const tick = async (seconds) => {
+    for (let t = 0; t < seconds; t += 1 / 30) {
+      step(1 / 30);
+      for (let i = 0; i < 8; i++) await null;
+    }
+  };
+  Object.assign(window, { bonggu, brain, body, tick, camera, THREE });
 }
 
+// ?speed=5 처럼 시간 배속. 긴 흐름을 빨리 확인할 때 쓴다.
+const simSpeed = Number(new URLSearchParams(location.search).get('speed')) || 1;
 const timer = new THREE.Timer();
 timer.connect(document);
 renderer.setAnimationLoop((time) => {
   timer.update(time);
-  const dt = Math.min(timer.getDelta(), 0.1); // 창이 가려졌다 돌아올 때 순간이동 방지
-  mixer.update(dt);
-  update(dt);
-  renderer.render(scene, camera);
+  step(Math.min(timer.getDelta(), 0.1) * simSpeed); // 창이 가려졌다 돌아올 때 순간이동 방지
 });
