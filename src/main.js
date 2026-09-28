@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { isTauri } from '@tauri-apps/api/core';
 import { createBrain } from './behavior.js';
 
 const TARGET_HEIGHT_PX = 140;
@@ -37,9 +38,13 @@ const bonggu = gltf.scene;
 bonggu.animations = gltf.animations;
 const box = new THREE.Box3().setFromObject(bonggu);
 const size = box.getSize(new THREE.Vector3());
-const ppm = TARGET_HEIGHT_PX / size.y; // 1m당 픽셀
-bonggu.scale.setScalar(ppm);
-bonggu.position.y = -box.min.y * ppm;
+let ppm; // 1m당 픽셀
+function setHeight(px) {
+  ppm = px / size.y;
+  bonggu.scale.setScalar(ppm);
+  bonggu.position.y = -box.min.y * ppm;
+}
+setHeight(TARGET_HEIGHT_PX);
 scene.add(bonggu);
 
 const smileMeshes = [];
@@ -141,15 +146,19 @@ renderer.domElement.addEventListener('click', (e) => {
   if (raycaster.intersectObject(bonggu, true).some((h) => h.object !== shadow)) brain.pet();
 });
 
+// Tauri 창이면 봉구 밖 클릭 통과와 트레이 크기 메뉴를 붙인다.
+const desktop = isTauri() ? await (await import('./desktop.js')).attach({ renderer, setHeight }) : null;
+
 function step(dt) {
   mixer.update(dt);
   update(dt);
   brain.tick(dt);
   renderer.render(scene, camera);
+  desktop?.afterRender();
 }
 
-// --- 개발용 패널 (vite dev에서만) ---
-if (import.meta.env.DEV) {
+// --- 개발용 패널 (브라우저 vite dev에서만) ---
+if (import.meta.env.DEV && !desktop) {
   ui = (await import('./dev-panel.js')).mount({
     clips: contract.clips,
     play: (name) => (brain.stop(), play(name)),

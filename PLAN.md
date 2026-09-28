@@ -36,7 +36,8 @@ exe 옆에 같이 배포해야 한다. 5단계에서 설치 파일(NSIS)에 이 
 - macOS 투명 창은 `app.macOSPrivateApi: true`가 필요하다.
 - **클릭 통과**: 기본은 `setIgnoreCursorEvents(true)`. `cursorPosition()`을 약 20Hz로 읽어 창 좌표로 바꾸고,
   렌더 직후 그 픽셀의 알파를 `gl.readPixels`로 1px 읽어 봉구 위일 때만 통과를 끈다.
-- capabilities에 필요한 창 권한만 넣는다(ignore-cursor-events, cursor-position, 모니터 조회, 위치·크기).
+- 창 위치·크기는 Rust `setup`에서 주 모니터 `work_area()`로 정하고, 준비된 뒤 `show()`한다.
+  capabilities에는 프런트엔드가 쓰는 권한만 넣는다(`core:default`, ignore-cursor-events, cursor-position).
 - 트레이 아이콘: 종료, 크기(작게/보통/크게). 그 외 설정은 필요해질 때 추가한다.
 
 ## 렌더링

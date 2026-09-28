@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "봉구 창에 필요한 권한만: 클릭 통과 전환, 커서 위치 읽기, 트레이 이벤트 수신",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-ignore-cursor-events",
+    "core:window:allow-cursor-position"
+  ]
+}
