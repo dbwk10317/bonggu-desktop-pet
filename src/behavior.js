@@ -77,7 +77,7 @@ export function createBrain(body, { log = () => {} } = {}) {
   async function standUp() {
     await until(() => body.clipLoops); // 앉는 중이면 다 앉은 뒤에
     await halt();
-    const up = body.clips.find((c) => !c.loop && c.entry_state === body.state && c.exit_state === 'stand');
+    const up = body.state !== 'stand' && body.clips.find((c) => !c.loop && c.entry_state === body.state && c.exit_state === 'stand');
     if (up) await oneShot(up.name);
   }
   async function turn(d) {
@@ -175,7 +175,7 @@ export function createBrain(body, { log = () => {} } = {}) {
   async function life(gen) {
     while (running && gen === generation) {
       try {
-        await until(() => !petting);
+        await until(() => !petting && !body.held);
         await standUp();
         await sleep(skew(T.standWait));
         const name = pick();
@@ -199,9 +199,11 @@ export function createBrain(body, { log = () => {} } = {}) {
       running = false;
       interrupt();
     },
+    // 들어 올리면 하던 일을 그만둔다. body.held가 풀리면(착지) 다시 고른다.
+    hold: interrupt,
     // 쓰다듬기: 하던 일을 멈추고 일어나서 반갑게 꼬리를 흔든다.
     async pet() {
-      if (!running || petting) return;
+      if (!running || petting || body.held) return;
       petting = true;
       interrupt();
       try {
