@@ -11,6 +11,7 @@ const T = {
   walkAfterRun: [0.6, 1.5],
   edgeMarginPx: 180, // 목적지는 화면 가장자리에서 이만큼 안쪽에서만 고른다
   gaitJitter: 0.1, // 걷기·달리기 timeScale ±10%
+  turnGait: 0.8, // 돌아설 때 걸음 빠르기(보통 걷기 대비)
   repeatPenalty: 0.15, // 방금 한 행동의 가중치 배율
   repeatRecover: 0.3, // 행동을 고를 때마다 회복되는 배율
   energyStart: 0.7,
@@ -82,6 +83,7 @@ export function createBrain(body, { log = () => {} } = {}) {
   async function turn(d) {
     if (d === body.dir) return;
     if (chance(0.25)) await loop('LookAround', 1);
+    body.play('Walk', T.turnGait * jitter()); // 걸으면서 U자로 돈다(main.js face)
     body.face(d);
     await until(() => body.turned);
   }

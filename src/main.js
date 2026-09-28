@@ -4,9 +4,11 @@ import { isTauri } from '@tauri-apps/api/core';
 import { createBrain } from './behavior.js';
 
 const TARGET_HEIGHT_PX = 140;
-const GROUND_MARGIN_PX = 16; // 창 아래쪽과 발 사이 여백(그림자 자리)
+const GROUND_MARGIN_PX = 24; // 창 아래쪽과 발 사이 여백(그림자 자리, 카메라 쪽으로 돌 때 앞으로 나올 자리)
 const FACE_CAMERA_DEG = 20; // 진행 방향에서 카메라 쪽으로 더 돌리는 각도
-const TURN_SECONDS = 0.4;
+const TURN_RADIUS = 0.25; // 돌아설 때 그리는 호의 반지름(봉구 키 대비)
+const TURN_MIN_SPEED_PX = 25; // 걸음이 멈춰도 이 속도로는 마저 돈다
+const DEPTH_RETURN = 0.1; // 돌고 나서 밀린 앞뒤 위치를 걸음 속도의 이 비율로 원래 줄로 되돌린다
 const SMILE_RATE = 6; // 초당 보간 비율
 const IDLE_OF = { stand: 'Idle', sit: 'SitIdle', lie: 'LieIdle', 'tail-low': 'TailLowIdle', walk: 'Walk', run: 'Run' };
 
@@ -39,7 +41,9 @@ bonggu.animations = gltf.animations;
 const box = new THREE.Box3().setFromObject(bonggu);
 const size = box.getSize(new THREE.Vector3());
 let ppm; // 1m당 픽셀
+let heightPx;
 function setHeight(px) {
+  heightPx = px;
   ppm = px / size.y;
   bonggu.scale.setScalar(ppm);
   bonggu.position.y = -box.min.y * ppm;
@@ -97,9 +101,24 @@ play('Idle');
 // --- 이동과 방향 ---
 let dir = 1; // +1 오른쪽, -1 왼쪽
 let speedPx = 0; // 현재 화면 이동 속도(px/s)
+let turnLeft = 0; // 남은 회전각(rad). 0이 아니면 U자를 그리며 도는 중
 const facing = (d) => d * THREE.MathUtils.degToRad(90 - FACE_CAMERA_DEG);
 const moveFactor = Math.cos(THREE.MathUtils.degToRad(FACE_CAMERA_DEG));
 bonggu.rotation.y = facing(dir);
+
+// 제자리에서 돌지 않고 걸으면서 U자로 돈다. U자는 좌우 대칭이라 x는 제자리지만 앞뒤(z)로 밀린다.
+// 카메라 쪽(얼굴이 보임, 앞으로 밀림)과 뒤쪽(엉덩이가 보임, 뒤로 밀림) 중 둘 다 되면 반반으로 고른다.
+// 앞으로 너무 나오면 발이 창 아래로 잘리고, 뒤로 너무 가면 떠 보인다.
+function face(d) {
+  if (d === dir) return;
+  dir = d;
+  const viaFront = facing(d) - bonggu.rotation.y; // 카메라 쪽으로 도는 각
+  const depth = 2 * Math.sin(facing(1)) * TURN_RADIUS * heightPx; // U자 한 번에 앞뒤로 밀리는 거리
+  const z = bonggu.position.z;
+  const frontOk = (z + depth) * Math.sin(THREE.MathUtils.degToRad(tiltDeg)) <= GROUND_MARGIN_PX - 8;
+  const backOk = z - depth >= -2 * depth;
+  turnLeft = frontOk && (!backOk || Math.random() < 0.5) ? viaFront : viaFront - Math.sign(viaFront) * 2 * Math.PI;
+}
 
 function update(dt) {
   // 크로스페이드 중에는 가중치만큼 섞인 속도로 움직인다. timeScale을 흔들면 속도도 같은 비율로.
@@ -107,12 +126,23 @@ function update(dt) {
   const mps = Object.values(actions)
     .filter((a) => a.isRunning())
     .reduce((s, a) => s + a.getEffectiveWeight() * a.getEffectiveTimeScale() * clipInfo[a.getClip().name].forward_speed_mps, 0);
-  speedPx = mps * ppm * moveFactor;
-  bonggu.position.x += dir * speedPx * dt;
+  const pathPx = mps * ppm; // 발이 딛는 방향으로의 속도
+  speedPx = pathPx * moveFactor;
 
-  const target = facing(dir);
-  const step = (Math.PI / TURN_SECONDS) * dt;
-  bonggu.rotation.y += THREE.MathUtils.clamp(target - bonggu.rotation.y, -step, step);
+  if (turnLeft) {
+    // 각속도 = 속도 / 반지름이라 걸음과 회전이 맞고, 걸음이 붙고 빠지는 동안 회전도 부드럽게 붙고 빠진다.
+    const w = Math.max(pathPx, TURN_MIN_SPEED_PX) / (TURN_RADIUS * heightPx);
+    const da = Math.sign(turnLeft) * Math.min(Math.abs(turnLeft), w * dt);
+    bonggu.rotation.y += da;
+    turnLeft -= da;
+    bonggu.position.x += Math.sin(bonggu.rotation.y) * pathPx * dt;
+    bonggu.position.z += Math.cos(bonggu.rotation.y) * pathPx * dt;
+    if (!turnLeft) bonggu.rotation.y = facing(dir);
+  } else {
+    const z = bonggu.position.z;
+    bonggu.position.x += dir * speedPx * dt;
+    bonggu.position.z -= Math.sign(z) * Math.min(Math.abs(z), DEPTH_RETURN * pathPx * dt);
+  }
 
   const smileTarget = clipInfo[current.getClip().name].smile;
   smile += (smileTarget - smile) * (1 - Math.exp(-SMILE_RATE * dt));
@@ -125,9 +155,9 @@ const body = {
   blendSeconds: contract.locomotion_blend_seconds,
   clipSeconds: (name) => clipInfo[name].duration_seconds,
   play,
-  face: (d) => (dir = d),
+  face,
   get dir() { return dir; },
-  get turned() { return Math.abs(bonggu.rotation.y - facing(dir)) < 1e-3; },
+  get turned() { return turnLeft === 0; },
   get x() { return bonggu.position.x; },
   get speed() { return speedPx; },
   get halfWidth() { return innerWidth / 2; },
@@ -162,7 +192,7 @@ if (import.meta.env.DEV && !desktop) {
   ui = (await import('./dev-panel.js')).mount({
     clips: contract.clips,
     play: (name) => (brain.stop(), play(name)),
-    turn: () => (dir = -dir),
+    turn: () => face(-dir),
     brain,
     tilt: tiltDeg,
     setTilt: (v) => ((tiltDeg = v), resize()),
