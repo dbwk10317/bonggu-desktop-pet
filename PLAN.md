@@ -51,7 +51,7 @@ exe 옆에 같이 배포해야 한다. Tauri NSIS 번들러가 이 DLL을 자동
 - `GLTFLoader`로 GLB 로드. 재질은 `KHR_materials_unlit`(MeshBasicMaterial)이라 조명이 필요 없다.
 - **직교 카메라**, 1m = `ppm` 픽셀. 로드 시 모델 높이를 재서 목표 화면 높이(보통 약 140px)로 `ppm`을 정한다.
   직교라서 `forward_speed_mps × ppm`이 곧 화면 속도가 되고 발이 미끄러지지 않는다.
-- **시점**: 옆모습으로 작업 표시줄 윗선을 땅으로 삼는다. 카메라를 10–15° 내려다보게 기울여 등과 발밑이 살짝 보이게 하고,
+- **시점**: 옆모습으로 작업 표시줄 윗선을 땅으로 삼는다. 카메라를 20° 내려다보게 기울여 등과 발밑이 살짝 보이게 하고,
   발밑에 부드러운 타원 그림자를 깐다. 좌우 이동이 답답하면 나중에 바탕화면 전체를 바닥으로 쓰는 3/4 뷰로 확장한다.
 - 모델 전방은 glTF +Z. 진행 방향(±X)으로 돌리되 얼굴이 보이도록 카메라 쪽으로 약 20° 더 돌린다.
   화면 이동 속도에 `cos(20°)`를 곱해 발 미끄러짐을 맞춘다.
@@ -65,7 +65,8 @@ exe 옆에 같이 배포해야 한다. Tauri NSIS 번들러가 이 DLL을 자동
 ## 동작 (clips.json 계약)
 
 - 상태: `stand`, `sit`, `lie`, `tail-low`, `walk`, `run`. 상태별 대기 루프:
-  stand→`Idle`, sit→`SitIdle`, lie→`LieIdle`, tail-low→`TailLowIdle`, walk→`Walk`, run→`Run`.
+  stand→`Idle`, sit→`SitIdle`, lie→`LieIdle`, tail-low→`TailLowIdle`, walk→`Walk`, run→`Run`,
+  sleep→`SleepIdle`, held→`Dangle`.
 - 한 번 재생 클립(`loop: false`)은 `LoopOnce` + `clampWhenFinished`로 재생한 뒤 `exit_state` 대기 루프로 넘어간다.
   모든 클립이 대기 루프 첫 프레임에서 시작·종료하므로 전환 시 대기 루프를 **0초부터** 시작한다.
 - 서 있는 상태의 루프 행동(PlayBow, LookAround, GroundSniff, LookUp, TailWagSoft, TailWagHappy)은
@@ -73,6 +74,8 @@ exe 옆에 같이 배포해야 한다. Tauri NSIS 번들러가 이 DLL을 자동
 - Idle↔Walk↔Run은 `locomotion_blend_seconds`(0.18초) 크로스페이드. 이동 속도도 가중치에 맞춰 올리고 내린다.
 - `root_motion: false` — 걷기·달리기는 제자리 클립이라 앱이 X 위치를 옮긴다.
 - `Smile` 모프: GLB 클립에 모프 애니메이션이 없다. 현재 클립의 `smile` 값을 향해 앱이 부드럽게 보간한다.
+- `Yawn`·`EyesClosed` 모프: 클립의 `morphs` 곡선(`[초, 값]`)을 재생 시간으로 샘플링하고,
+  크로스페이드 중에는 믹서에 올라간 클립들의 가중치로 섞는다. 곡선이 없는 클립에서는 0.
 - `animations/`의 이전 골격 행동 팩(`previous_behaviors`)은 사용하지 않는다.
 
 ### 행동 선택 (자연스러움)
@@ -96,6 +99,12 @@ exe 옆에 같이 배포해야 한다. Tauri NSIS 번들러가 이 DLL을 자동
   `grip_point`(겨드랑이)가 커서를 살짝 늦게 따라간다. 들려 있는 동안 얼굴은 정면(카메라)을 보고 그림자는 바닥에 남는다.
   놓으면 중력(9.8m/s² × ppm)으로 떨어지면서 진행 방향으로 몸을 돌리고, 착지하면 `Idle`로 크로스페이드한 뒤 행동을 다시 고른다.
   들고 있는 동안은 캔버스를 창 높이로 키우고(바닥 선은 그대로) 클릭 통과를 끈다.
+- **하품**: 서 있을 때 고르는 행동 중 하나로 피곤할수록(기운이 낮을수록) 자주 한다. 자고 일어난 뒤에도 가끔 한다.
+- **잠자기**: 시스템 전체 마우스·키보드 입력이 5분 없으면(Rust `idle_seconds`: Windows `GetLastInputInfo`,
+  macOS `CGEventSourceSecondsSinceLastEventType`) 하던 일을 멈추고 엎드려 `FallAsleep`→`SleepIdle`로 잔다.
+  입력이 생기면 5초 뒤 `WakeUp`으로 깨서 엎드린 채 잠깐 있다가 일어난다. 자는 동안 클릭(쓰다듬기)은 받지 않고
+  드래그하면 바로 들린다. `FallAsleep`은 오른쪽 옆구리를 대고 눕기 때문에 왼쪽을 보고 누워야 얼굴이 보여서,
+  오른쪽을 보고 있으면 먼저 걸어서 돌아선 뒤 엎드린다.
 - 조정값(가중치, 시간 범위, 기운 증감)은 `src/behavior.js` 맨 위 표 `T`·`WEIGHTS`에 모아 두고 관찰하며 고친다.
 - 개발용: 시간 배속(`?speed=5`), 행동 기록 콘솔 출력, 콘솔에서 `await tick(초)`로 시간을 직접 진행
   (미리보기 창이 가려져 프레임이 멈출 때 긴 흐름과 분포를 확인하는 용도).
@@ -116,5 +125,4 @@ exe 옆에 같이 배포해야 한다. Tauri NSIS 번들러가 이 DLL을 자동
 
 - 앉은 채 바로 엎드리는 클립이 없어 sit→lie는 일어났다 다시 엎드린다. 어색하면 모델 저장소에 클립을 요청한다.
 - 커서 쳐다보기: GLB에는 드라이버가 구운 본 애니메이션만 있어서 앱에서 목·머리 본을 절차적으로 더 돌려야 한다.
-- 잠자기(`FallAsleep`·`SleepIdle`·`WakeUp`)와 `Yawn`을 행동 선택에 넣기, 클립별 `morphs` 곡선 적용.
 - 모니터 넘나들기, 자동 시작, 설정 창, 자동 업데이트, 코드 서명.

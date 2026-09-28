@@ -26,7 +26,7 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 // 직교 카메라, 1 단위 = 1 CSS 픽셀. 원점(발)이 창 아래쪽에서 GROUND_MARGIN_PX 위.
 const camera = new THREE.OrthographicCamera(0, 1, 1, 0, -2000, 2000);
-let tiltDeg = 12;
+let tiltDeg = 20;
 // 데스크톱 창은 작업 영역 높이로 떠 있지만 평소에는 바닥 띠만 그린다. 들고 있는 동안만 창 전체를 그린다.
 // 창 크기를 바꾸면 웹뷰가 다시 그리기 전 화면이 잠깐 보여 깜빡이므로, 캔버스 크기만 바꾼다.
 const STRIP_PX = isTauri() ? 300 : 0; // 0이면 늘 창 전체(브라우저)
@@ -74,9 +74,19 @@ addEventListener('resize', () => {
   bonggu.position.x = THREE.MathUtils.clamp(bonggu.position.x, -limit, limit);
 });
 
-const smileMeshes = [];
-bonggu.traverse((o) => o.morphTargetDictionary?.Smile !== undefined && smileMeshes.push(o));
-const setSmile = (v) => smileMeshes.forEach((m) => (m.morphTargetInfluences[m.morphTargetDictionary.Smile] = v));
+const morphMeshes = [];
+bonggu.traverse((o) => o.morphTargetDictionary && morphMeshes.push(o));
+const setMorph = (name, v) =>
+  morphMeshes.forEach((m) => m.morphTargetDictionary[name] !== undefined && (m.morphTargetInfluences[m.morphTargetDictionary[name]] = v));
+// 하품·눈 감기처럼 clips.json에 [초, 값] 곡선(morphs)으로 주어진 표정들
+const curveNames = [...new Set(contract.clips.flatMap((c) => Object.keys(c.morphs ?? {})))];
+function sample(curve, t) {
+  const i = curve.findIndex(([ct]) => ct >= t);
+  if (i < 0) return curve.at(-1)[1];
+  if (i === 0) return curve[0][1];
+  const [t0, v0] = curve[i - 1], [t1, v1] = curve[i];
+  return v0 + ((v1 - v0) * (t - t0)) / (t1 - t0);
+}
 
 // 발밑 타원 그림자: 모델의 자식이라 몸 방향을 따라 돈다.
 const shadowTex = (() => {
@@ -163,11 +173,16 @@ function grab() {
 }
 
 function update(dt) {
-  // 크로스페이드 중에는 가중치만큼 섞인 속도로 움직인다. timeScale을 흔들면 속도도 같은 비율로.
-  // 재생한 적 없는 동작도 가중치가 1로 남아 있어서 재생 중인 것만 센다.
-  const mps = Object.values(actions)
-    .filter((a) => a.isRunning())
-    .reduce((s, a) => s + a.getEffectiveWeight() * a.getEffectiveTimeScale() * clipInfo[a.getClip().name].forward_speed_mps, 0);
+  // 크로스페이드 중에는 가중치만큼 섞인 속도로 움직이고 표정도 섞는다. timeScale을 흔들면 속도도 같은 비율로.
+  // 재생한 적 없는 동작도 가중치가 1로 남아 있어서 믹서에 올라간 것만 센다(끝나서 멈춘 채 페이드아웃 중인 한 번 재생 클립 포함).
+  const active = Object.values(actions).filter((a) => a.isScheduled());
+  const mps = active.reduce((s, a) => s + a.getEffectiveWeight() * a.getEffectiveTimeScale() * clipInfo[a.getClip().name].forward_speed_mps, 0);
+  for (const name of curveNames) {
+    setMorph(name, active.reduce((s, a) => {
+      const curve = clipInfo[a.getClip().name].morphs?.[name];
+      return curve ? s + a.getEffectiveWeight() * sample(curve, a.time) : s;
+    }, 0));
+  }
   const pathPx = mps * ppm; // 발이 딛는 방향으로의 속도
   speedPx = pathPx * moveFactor;
 
@@ -210,10 +225,14 @@ function update(dt) {
 
   const smileTarget = clipInfo[current.getClip().name].smile;
   smile += (smileTarget - smile) * (1 - Math.exp(-SMILE_RATE * dt));
-  setSmile(smile);
+  setMorph('Smile', smile);
 }
 
 // --- 행동 ---
+// 마지막 입력 뒤로 지난 초. 데스크톱이면 시스템 전체(desktop.js), 브라우저면 이 페이지의 입력만 센다.
+let lastInput = performance.now();
+for (const type of ['pointermove', 'pointerdown', 'keydown', 'wheel']) addEventListener(type, () => (lastInput = performance.now()));
+
 const body = {
   clips: contract.clips,
   blendSeconds: contract.locomotion_blend_seconds,
@@ -223,6 +242,7 @@ const body = {
   get dir() { return dir; },
   get turned() { return turnLeft === 0; },
   get held() { return holdTarget !== null || fallSpeed !== null; },
+  get idle() { return desktop ? desktop.idle : (performance.now() - lastInput) / 1000; },
   get x() { return bonggu.position.x; },
   get speed() { return speedPx; },
   get halfWidth() { return innerWidth / 2; },

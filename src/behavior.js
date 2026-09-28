@@ -14,10 +14,12 @@ const T = {
   turnGait: 0.8, // 돌아설 때 걸음 빠르기(보통 걷기 대비)
   repeatPenalty: 0.15, // 방금 한 행동의 가중치 배율
   repeatRecover: 0.3, // 행동을 고를 때마다 회복되는 배율
+  sleepAfterIdle: 300, // 마우스·키보드 입력이 이만큼(초) 없으면 엎드려 잠든다
+  wakeDelay: 5, // 잠든 뒤 입력이 생기면 이만큼(초) 뒤에 깬다
   energyStart: 0.7,
   // 기운 변화(초당). 아무것도 안 해도 조금씩 졸려서 10–15분 활동하면 길게 엎드려 쉰다.
   energyDrift: -0.0008,
-  energyPerSec: { Walk: -0.006, Run: -0.03, PlayBow: -0.02, sit: 0.005, lie: 0.009, 'tail-low': 0.002 },
+  energyPerSec: { Walk: -0.006, Run: -0.03, PlayBow: -0.02, sit: 0.005, lie: 0.009, 'tail-low': 0.002, sleep: 0.015 },
   energyPet: 0.1,
 };
 
@@ -33,9 +35,13 @@ const WEIGHTS = {
   sit: (e) => 1.5 * (1.1 - e),
   lie: (e) => 2 * (1 - e) ** 2,
   tailLow: () => 0.25,
+  yawn: (e) => 0.5 * (1.2 - e), // 피곤할수록 자주
 };
 
-const skew = ([a, b]) => a + (b - a) * Math.random() ** 2; // 짧은 쪽이 흔하고 가끔 길게
+// FallAsleep은 오른쪽 옆구리를 대고 눕는다. 왼쪽을 보고 누워야 얼굴과 배가 카메라 쪽으로 보인다.
+const SLEEP_DIR = -1;
+
+const skew =([a, b]) => a + (b - a) * Math.random() ** 2; // 짧은 쪽이 흔하고 가끔 길게
 const reps = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
 const chance = (p) => Math.random() < p;
 const CANCEL = Symbol('cancel');
@@ -46,6 +52,7 @@ export function createBrain(body, { log = () => {} } = {}) {
   let running = false;
   let generation = 0;
   let petting = false;
+  let sleeping = false;
   const penalty = {};
   const waiters = new Set();
 
@@ -161,7 +168,36 @@ export function createBrain(body, { log = () => {} } = {}) {
       await sleep(skew(T.tailLow));
       await oneShot('TailRaise');
     },
+    yawn: () => oneShot('Yawn'),
   };
+
+  // 오래 입력이 없으면 하던 일을 멈추고 엎드려 잠든다. 입력이 생기면 T.wakeDelay 뒤에 깨서 엎드린 채 잠깐 있다가 일어난다.
+  async function doze() {
+    sleeping = true;
+    interrupt();
+    try {
+      log(`${time.toFixed(0)}s 잠들기`);
+      await until(() => body.clipLoops); // 앉거나 엎드리는 중이면 다 한 뒤에
+      if (body.state !== 'lie' || body.dir !== SLEEP_DIR) {
+        await standUp();
+        await turn(SLEEP_DIR);
+        await halt();
+        await oneShot('LieDown');
+      }
+      await oneShot('FallAsleep');
+      await until(() => body.idle < T.sleepAfterIdle);
+      await sleep(T.wakeDelay);
+      log(`${time.toFixed(0)}s 깨기`);
+      await oneShot('WakeUp');
+      await sleep(skew([1, 4]));
+      await oneShot('LieUp');
+      if (chance(0.6)) await oneShot('Yawn');
+    } catch (e) {
+      if (e !== CANCEL) throw e;
+    } finally {
+      sleeping = false;
+    }
+  }
 
   function pick() {
     const entries = Object.entries(WEIGHTS).map(([k, f]) => [k, f(energy) * (penalty[k] ?? 1)]);
@@ -175,7 +211,7 @@ export function createBrain(body, { log = () => {} } = {}) {
   async function life(gen) {
     while (running && gen === generation) {
       try {
-        await until(() => !petting && !body.held);
+        await until(() => !petting && !sleeping && !body.held);
         await standUp();
         await sleep(skew(T.standWait));
         const name = pick();
@@ -203,7 +239,7 @@ export function createBrain(body, { log = () => {} } = {}) {
     hold: interrupt,
     // 쓰다듬기: 하던 일을 멈추고 일어나서 반갑게 꼬리를 흔든다.
     async pet() {
-      if (!running || petting || body.held) return;
+      if (!running || petting || sleeping || body.held) return; // 자는 중에 누른 것도 입력이라 곧 깬다
       petting = true;
       interrupt();
       try {
@@ -221,6 +257,7 @@ export function createBrain(body, { log = () => {} } = {}) {
       time += dt;
       const rate = T.energyDrift + (T.energyPerSec[body.clip] ?? T.energyPerSec[body.state] ?? 0);
       energy = Math.min(1, Math.max(0, energy + rate * dt));
+      if (running && !sleeping && !petting && !body.held && body.idle >= T.sleepAfterIdle) doze();
       for (const w of waiters) if (w.pred()) (waiters.delete(w), w.resolve());
     },
   };

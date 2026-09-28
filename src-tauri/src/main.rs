@@ -58,6 +58,52 @@ fn place(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// 마지막 마우스·키보드 입력 뒤로 지난 초(시스템 전체). 오래 입력이 없으면 봉구가 잔다.
+#[tauri::command]
+fn idle_seconds() -> f64 {
+    seconds_since_input()
+}
+
+#[cfg(windows)]
+fn seconds_since_input() -> f64 {
+    #[repr(C)]
+    struct LastInputInfo {
+        size: u32,
+        time: u32,
+    }
+    #[link(name = "user32")]
+    extern "system" {
+        fn GetLastInputInfo(info: *mut LastInputInfo) -> i32;
+    }
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetTickCount() -> u32;
+    }
+    let mut info = LastInputInfo { size: std::mem::size_of::<LastInputInfo>() as u32, time: 0 };
+    // 틱은 49일마다 한 바퀴 돌아서 wrapping_sub로 뺀다.
+    unsafe {
+        if GetLastInputInfo(&mut info) == 0 {
+            return 0.0;
+        }
+        GetTickCount().wrapping_sub(info.time) as f64 / 1000.0
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn seconds_since_input() -> f64 {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceSecondsSinceLastEventType(state: i32, event: u32) -> f64;
+    }
+    // kCGEventSourceStateCombinedSessionState, kCGAnyInputEventType
+    unsafe { CGEventSourceSecondsSinceLastEventType(0, u32::MAX) }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
+fn seconds_since_input() -> f64 {
+    0.0
+}
+
 fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
     let current = target_monitor(app).and_then(|m| m.name().cloned());
     let primary = app.primary_monitor().ok().flatten().and_then(|m| m.name().cloned());
@@ -142,6 +188,7 @@ fn main() {
             watch_monitors(handle);
             Ok(())
         })
+        .invoke_handler(tauri::generate_handler![idle_seconds])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
