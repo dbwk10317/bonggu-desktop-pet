@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "test": "node --test",
     "predev": "node scripts/copy-model.mjs",
     "dev": "vite",
     "prebuild": "node scripts/copy-model.mjs",

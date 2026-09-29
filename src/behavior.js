@@ -95,11 +95,13 @@ export function createBrain(body, { log = () => {} } = {}) {
     await until(() => body.turned);
   }
   async function walkTo(x) {
-    const d = Math.sign(x - body.x);
+    // 창이 줄거나 냄새 맡은 뒤 다음 구간으로 출발할 때도 현재 화면 안을 목표로 한다.
+    const target = () => Math.max(-limit(), Math.min(limit(), x));
+    const d = Math.sign(target() - body.x);
     if (!d) return;
     await turn(d);
     body.play('Walk', jitter());
-    await until(() => (x - body.x) * d <= (body.speed * body.blendSeconds) / 2);
+    await until(() => (target() - body.x) * d <= (body.speed * body.blendSeconds) / 2);
     await halt();
   }
 

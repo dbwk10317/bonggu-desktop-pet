@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { isTauri } from '@tauri-apps/api/core';
 import { createBrain } from './behavior.js';
+import { hitsModel } from './picking.js';
 
 const TARGET_HEIGHT_PX = 140;
 const GROUND_MARGIN_PX = 24; // 창 아래쪽과 발 사이 여백(그림자 자리, 카메라 쪽으로 돌 때 앞으로 나올 자리)
@@ -267,7 +268,7 @@ function aim(e) {
 let press = null; // 봉구 위에서 누른 위치
 canvas.addEventListener('pointerdown', (e) => {
   aim(e);
-  if (e.button !== 0 || !raycaster.intersectObject(bonggu, true).some((h) => h.object !== shadow)) return;
+  if (e.button !== 0 || !hitsModel(raycaster, bonggu, shadow)) return;
   press = { x: e.clientX, y: e.clientY };
   canvas.setPointerCapture(e.pointerId); // 커서가 창 밖으로 나가도 계속 받는다
 });

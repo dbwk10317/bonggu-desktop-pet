@@ -27,19 +27,54 @@ fn saved_monitor(app: &AppHandle) -> Option<String> {
     fs::read_to_string(saved_path(app)?).ok().map(|s| s.trim().to_string())
 }
 
-fn save_monitor(app: &AppHandle, name: &str) {
+fn save_monitor(app: &AppHandle, selection: &str) {
     if let Some(path) = saved_path(app) {
         let _ = path.parent().map(fs::create_dir_all);
-        let _ = fs::write(path, name);
+        let _ = fs::write(path, selection);
+    }
+}
+
+// macOS의 이름은 모델 번호라 같을 수 있다. 해상도·배율과 무관한 위치를 함께 쓴다.
+fn monitor_key(monitor: &Monitor) -> String {
+    format!("{}:{}:{}", monitor.position().x, monitor.position().y, monitor.name().map(String::as_str).unwrap_or_default())
+}
+
+fn key_name(key: &str) -> &str {
+    key.splitn(3, ':').nth(2).unwrap_or_default()
+}
+
+fn unique_name_index(name: &str, keys: &[String]) -> Option<usize> {
+    if name.is_empty() { return None; }
+    let mut matches = keys.iter().enumerate().filter(|(_, key)| key_name(key) == name);
+    let (index, _) = matches.next()?;
+    if matches.next().is_none() { Some(index) } else { None }
+}
+
+fn monitor_selection(key: &str, keys: &[String]) -> String {
+    let mode = if unique_name_index(key_name(key), keys).is_some() { "unique" } else { "position" };
+    format!("v1:{mode}\n{key}")
+}
+
+fn saved_monitor_index(saved: &str, keys: &[String]) -> Option<usize> {
+    if let Some((mode, key)) = saved.split_once('\n') {
+        if !matches!(mode, "v1:unique" | "v1:position") { return None; }
+        keys.iter().position(|candidate| candidate == key).or_else(|| {
+            // 중복 이름에서 고른 화면이 빠졌을 때 남은 같은 모델을 잘못 선택하지 않는다.
+            if mode == "v1:unique" { unique_name_index(key_name(key), keys) } else { None }
+        })
+    } else {
+        // 이전 monitor.txt의 이름만 있는 값은 유일한 경우에만 복원한다.
+        unique_name_index(saved, keys)
     }
 }
 
 /// 트레이에서 고른 모니터가 연결돼 있으면 그것, 아니면 주 모니터.
 fn target_monitor(app: &AppHandle) -> Option<Monitor> {
-    let saved = saved_monitor(app);
-    monitors(app)
-        .into_iter()
-        .find(|m| saved.is_some() && m.name() == saved.as_ref())
+    let all = monitors(app);
+    let keys: Vec<_> = all.iter().map(monitor_key).collect();
+    saved_monitor(app)
+        .and_then(|saved| saved_monitor_index(&saved, &keys))
+        .map(|index| all[index].clone())
         .or_else(|| app.primary_monitor().ok().flatten())
 }
 
@@ -105,17 +140,17 @@ fn seconds_since_input() -> f64 {
 }
 
 fn tray_menu(app: &AppHandle) -> tauri::Result<Menu<Wry>> {
-    let current = target_monitor(app).and_then(|m| m.name().cloned());
-    let primary = app.primary_monitor().ok().flatten().and_then(|m| m.name().cloned());
+    let current = target_monitor(app).as_ref().map(monitor_key);
+    let primary = app.primary_monitor().ok().flatten().as_ref().map(monitor_key);
     let screens = Submenu::new(app, "모니터 (왼쪽부터)", true)?;
     for (i, m) in monitors(app).iter().enumerate() {
-        let name = m.name().cloned().unwrap_or_default();
+        let key = monitor_key(m);
         let mut label = format!("모니터 {} ({}×{})", i + 1, m.size().width, m.size().height);
-        if Some(&name) == primary.as_ref() {
+        if Some(&key) == primary.as_ref() {
             label.push_str(" · 주 모니터");
         }
-        let checked = Some(&name) == current.as_ref();
-        screens.append(&CheckMenuItem::with_id(app, format!("monitor:{name}"), label, true, checked, None::<&str>)?)?;
+        let checked = Some(&key) == current.as_ref();
+        screens.append(&CheckMenuItem::with_id(app, format!("monitor:{key}"), label, true, checked, None::<&str>)?)?;
     }
 
     let small = MenuItem::with_id(app, "size:small", "작게", true, None::<&str>)?;
@@ -138,8 +173,10 @@ fn on_menu(app: &AppHandle, id: &str) {
         app.exit(0);
     } else if let Some(size) = id.strip_prefix("size:") {
         let _ = app.emit("size", size);
-    } else if let Some(name) = id.strip_prefix("monitor:") {
-        save_monitor(app, name);
+    } else if let Some(key) = id.strip_prefix("monitor:") {
+        let keys: Vec<_> = monitors(app).iter().map(monitor_key).collect();
+        if !keys.iter().any(|candidate| candidate == key) { return; }
+        save_monitor(app, &monitor_selection(key, &keys));
         let _ = place(app);
         refresh_menu(app);
     }
@@ -175,8 +212,11 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             let handle = app.handle().clone();
+            let win = app.get_webview_window("main").expect("main window");
+            // WebGL·모델 로딩이 실패해도 투명 창이 바탕화면 입력을 막지 않는다.
+            win.set_ignore_cursor_events(true)?;
             place(&handle)?;
-            app.get_webview_window("main").expect("main window").show()?;
+            win.show()?;
 
             TrayIconBuilder::with_id(TRAY_ID)
                 .icon(app.default_window_icon().expect("app icon").clone())
@@ -191,4 +231,42 @@ fn main() {
         .invoke_handler(tauri::generate_handler![idle_seconds])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{monitor_selection, saved_monitor_index};
+
+    #[test]
+    fn same_model_displays_are_selected_and_restored_separately() {
+        let keys: Vec<String> = vec!["0:0:Monitor #123".into(), "1920:0:Monitor #123".into()];
+        for index in 0..keys.len() {
+            let saved = monitor_selection(&keys[index], &keys);
+            assert_eq!(saved_monitor_index(&saved, &keys), Some(index));
+            let remaining = vec![keys[1 - index].clone()];
+            assert_eq!(saved_monitor_index(&saved, &remaining), None);
+            assert_eq!(saved_monitor_index(&saved, &keys), Some(index));
+        }
+        assert_eq!(saved_monitor_index("Monitor #123", &keys), None);
+    }
+
+    #[test]
+    fn unique_name_survives_position_changes_and_legacy_settings() {
+        let keys: Vec<String> = vec!["0:0:DISPLAY1".into(), "1920:0:DISPLAY2".into()];
+        let saved = monitor_selection(&keys[1], &keys);
+        let moved = vec!["0:0:DISPLAY1".into(), "2560:0:DISPLAY2".into()];
+        assert_eq!(saved_monitor_index(&saved, &moved), Some(1));
+        assert_eq!(saved_monitor_index("DISPLAY2", &moved), Some(1));
+        assert_eq!(saved_monitor_index(&saved, &[]), None);
+    }
+
+    #[test]
+    fn unnamed_monitors_use_position_without_a_name_fallback() {
+        let keys: Vec<String> = vec!["-1920:0:".into(), "0:0:".into()];
+        let saved = monitor_selection(&keys[0], &keys);
+        assert_eq!(saved_monitor_index(&saved, &keys), Some(0));
+        assert_eq!(saved_monitor_index(&saved, &keys[1..]), None);
+        assert_eq!(saved_monitor_index("", &keys), None);
+        assert_eq!(saved_monitor_index("v9:unknown\n0:0:", &keys), None);
+    }
 }
