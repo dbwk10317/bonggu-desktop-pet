@@ -26,7 +26,9 @@
 
 최소 Tauri 앱으로 확인함: 릴리스 빌드 성공, 창 실행 성공. exe는 MinGW DLL이 필요 없고
 Windows 기본 DLL(UCRT 포함)만 쓴다. 단, GNU 빌드는 `WebView2Loader.dll`을 정적 링크하지 않으므로
-exe 옆에 같이 배포해야 한다. Tauri NSIS 번들러가 이 DLL을 자동으로 설치·제거한다(`npx tauri build --bundles nsis`).
+exe 옆에 같이 배포해야 한다. Tauri NSIS 번들러가 이 DLL을 자동으로 설치·제거한다.
+`npm run release`가 NSIS 설치 파일을 빌드해 `release/`에 복사한다. `dist/`는 Vite 출력이고
+Tauri가 exe에 통째로 넣으므로 설치 파일을 두지 않는다.
 
 ## 창 구성
 

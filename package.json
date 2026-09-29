@@ -8,7 +8,8 @@
     "dev": "vite",
     "prebuild": "node scripts/copy-model.mjs",
     "build": "vite build",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "release": "tauri build --bundles nsis && node -e \"require('fs').cpSync('src-tauri/target/release/bundle/nsis', 'release', { recursive: true })\""
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.0",
