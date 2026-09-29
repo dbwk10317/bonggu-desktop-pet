@@ -3,4 +3,3 @@ dist
 public/model
 src-tauri/target
 src-tauri/gen
-release
